@@ -1,1 +1,7 @@
 .vscode
+__pycache__/
+*.build/
+*.dist/
+releases/
+dev.py
+build.bat
