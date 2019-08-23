@@ -1,161 +1,209 @@
 #!/usr/bin/env python3
 
-import pyautogui, os, psutil, sys, time, subprocess, cv2, signal
+import pyautogui, os, psutil, sys, subprocess, cv2, signal, patterns
+from time import time
+from time import sleep
 
-
-PAT_REALM_LISTING = "patterns/realm.png"
-PAT_REALM_QUE = "patterns/realm-que-pat.png"
-PAT_LOGGING = "patterns/logging-pat.png"
-PAT_BNET_PLAY = "patterns/battlenet-play.png"
-PAT_CHAR_SCREEN = "patterns/character-screen.png"
 PROCESS_BNET = "Battle.net.exe"
 EXE_BNET = "C:\Program Files (x86)\Battle.net\Battle.net Launcher.exe"
 PROCESS_WOW = "Wow.exe"
 SECONDS_MAX_WAIT = 15
+SECONDS_MAX_WAIT_PROCESS = 30
 SECONDS_SLEEP = 15
-SECONDS_IDLE = 60*10
-SECONDS_CHAR_SCREEN = 60
+SECONDS_CHAR_SCREEN = 30
 
 STATE_INIT = "INIT"
-STATE_RUNNING = "RUNNING"
-STATE_IDLE = "IDLE"
-STATE_RESTART = "RESTART"
 STATE_LAUNCH_WOW = "LAUNCHING_WOW"
 STATE_WAIT_WOW = "WAITING_WOW"
 STATE_LAUNCH_BNET = "LAUNCHING_BNET"
 STATE_WAIT_BNET = "WAITING_BNET"
-STATE_LOAD_REALM = "LOADING_REALM"
 STATE_CHAR_SCREEN = "CHARACTER_SCREEN"
+STATE_REALM_WAIT = "REALM_WAIT"
+STATE_REALM_LIST = "REALM_LIST"
+STATE_REALM_QUE = "REALM_QUE"
+STATE_GAMESERVER_WAIT = "GAMESERVER_WAIT"
+STATE_CONNECTING_WAIT = "CONNECTING_WAIT"
 
 def main():
+
   state = STATE_INIT
-  is_bnet_running = False
-  is_wow_running = False
-  is_realm_list = False
-  is_logging = False
-  is_realm_que = False
-  is_char_screen = False
+  timer = 0
+  last = 0
 
-  state = STATE_RUNNING
-  timer = None
   while True:
-    current = time.time()
+    last = time()
+    # print("\nSTATE:", state, "\nEXE_TIME:", (time() - last), "\nTIMER:", (timer - time()), "\n")
 
-    is_bnet_running = get_is_bnet_running()
-    is_wow_running = get_is_wow_running()
-    is_char_screen = get_is_char_screen()
-    is_realm_que =  get_is_realm_que()
-    is_logging = get_is_logging()
-    is_realm_list = get_is_realm_list()
-
-    if state == STATE_RUNNING:
-      if not is_wow_running:
-        if is_bnet_running:
+    if state == STATE_INIT:
+      if not get_is_wow_running():
+        if get_is_bnet_running() and get_is_bnet_visible():
           state = STATE_LAUNCH_WOW
+          pass
         else:
           state = STATE_LAUNCH_BNET
+          pass
       else:
-        if is_char_screen :
+
+        if get_is_char_screen():
           state = STATE_CHAR_SCREEN
-          timer = current + SECONDS_MAX_WAIT
-        elif is_logging or is_realm_que:
-          state = STATE_IDLE
-        elif is_realm_list:
-          state = STATE_LOAD_REALM
-          timer = current + SECONDS_MAX_WAIT
+
+        elif get_is_gameserver_wait():
+          state = STATE_GAMESERVER_WAIT
+
+        elif get_is_realm_que():
+          state = STATE_REALM_QUE
+
+        elif get_is_realm_list():
+          state = STATE_REALM_LIST
+
+        elif get_is_realm_wait():
+          state = STATE_REALM_WAIT
+
+        elif get_is_connecting():
+          state = STATE_CONNECTING_WAIT
+
         else:
-          timer = current + SECONDS_MAX_WAIT
-          state = STATE_RESTART
+          state = STATE_LAUNCH_WOW
+          pass
+
+      timer = time() + SECONDS_MAX_WAIT_PROCESS
+      continue
 
 
     elif state == STATE_LAUNCH_BNET:
       if launch_bnet():
         state = STATE_WAIT_BNET
-        timer = current
+        timer = time() + SECONDS_MAX_WAIT_PROCESS
+      continue
 
 
     elif state == STATE_WAIT_BNET:
-      if current >= timer + SECONDS_MAX_WAIT:
-        print("Error timed-out waiting for %s" % EXE_BNET)
-        state = STATE_RUNNING
-      elif is_bnet_running:
-          state = STATE_RUNNING
+      if get_is_bnet_running() and get_is_bnet_visible():
+        state = STATE_LAUNCH_WOW
+        timer = time() + SECONDS_MAX_WAIT_PROCESS
+      elif time() >= timer:
+        state = STATE_LAUNCH_BNET
+      continue
 
 
     elif state == STATE_LAUNCH_WOW:
-      launch_wow()
-      state = STATE_WAIT_WOW
-      timer = current
+      if (not get_is_bnet_running() or not get_is_bnet_visible()) and not get_is_wow_running():
+        state = STATE_LAUNCH_BNET
+        timer = time() + SECONDS_MAX_WAIT_PROCESS
+      elif launch_wow():
+        state = STATE_WAIT_WOW
+        timer = time() + SECONDS_MAX_WAIT_PROCESS
+      elif time() >= timer:
+        state = STATE_LAUNCH_BNET
+      continue
 
 
     elif state == STATE_WAIT_WOW:
-      if current >= timer + SECONDS_MAX_WAIT:
-        print("Error timed-out waiting for %s" % PROCESS_WOW)
-        state = STATE_LAUNCH_BNET
-      elif is_wow_running:
-          state = STATE_RUNNING
+      if get_is_wow_running():
+        state = STATE_CONNECTING_WAIT
+        timer = time() + SECONDS_MAX_WAIT
+      elif time() >= timer:
+        state = STATE_LAUNCH_WOW
+        timer = time() + SECONDS_MAX_WAIT_PROCESS
+      continue
 
 
-    elif state == STATE_IDLE:
-      if is_logging or is_realm_que:
-        sleep(SECONDS_SLEEP, "Waiting for login/queue...")
-      else:
-        state = STATE_RUNNING
+    elif state == STATE_CONNECTING_WAIT or state == STATE_REALM_WAIT:
+      if get_is_connecting() or get_is_realm_wait():
+        msleep(SECONDS_SLEEP, "Waiting for connection/realm...")
+        timer = time() + SECONDS_MAX_WAIT
+      elif get_is_realm_list():
+        state = STATE_REALM_LIST
+        timer = time() + SECONDS_MAX_WAIT
+      elif time() >= timer:
+        print("Error waiting for connection/realm listing... Restarting...")
+        state = STATE_LAUNCH_WOW
+        timer = time() + SECONDS_MAX_WAIT
+      continue
 
 
-    elif state == STATE_LOAD_REALM:
-      if current >= timer:
+    elif state == STATE_REALM_LIST:
+      if load_realm():
+          state = STATE_GAMESERVER_WAIT
+          timer = time() + SECONDS_MAX_WAIT
+      elif time() >= timer:
         print("Error finding realm listing... Restarting...")
-        state = STATE_RESTART
-      else:
-        load_realm()
+        state = STATE_GAMESERVER_WAIT
+        timer = time() + SECONDS_MAX_WAIT
+      continue
+
+
+    elif state == STATE_REALM_QUE:
+      if get_is_char_screen():
         state = STATE_CHAR_SCREEN
+        timer = time() + SECONDS_MAX_WAIT
+      elif get_is_gameserver_wait():
+        state = STATE_GAMESERVER_WAIT
+        timer = time() + SECONDS_MAX_WAIT
+      elif get_is_realm_que():
+        msleep(SECONDS_SLEEP, "Waiting for realm que...")
+        timer = time() + SECONDS_MAX_WAIT
+      elif time() >= timer:
+        state = STATE_GAMESERVER_WAIT
+        timer = time() + SECONDS_MAX_WAIT
+      continue
+
+
+    elif state == STATE_GAMESERVER_WAIT:
+      if get_is_char_screen():
+        state = STATE_CHAR_SCREEN
+        timer = time() + SECONDS_MAX_WAIT
+      elif get_is_gameserver_wait():
+        msleep(SECONDS_SLEEP, "Waiting for gameserver...")
+        timer = time() + SECONDS_MAX_WAIT
+      elif time() >= timer:
+        print("Error timed out waiting for gameserver... Restarting...")
+        state = STATE_INIT
+      continue
 
 
     elif state == STATE_CHAR_SCREEN:
-      if current >= timer:
+      if get_is_char_screen():
+        msleep(SECONDS_CHAR_SCREEN, "Waiting on character screen")
+        timer = time() + SECONDS_MAX_WAIT
+      elif not get_is_wow_running():
+        state = STATE_INIT
+      elif time() >= timer and not get_is_char_screen():
         print("Error confirming character screen... Restarting...")
-        state = STATE_RESTART
-      elif is_char_screen:
-        sleep(SECONDS_CHAR_SCREEN)
-        state = STATE_RUNNING
+        state = STATE_INIT
+      continue
 
 
-    elif state == STATE_RESTART:
-      if current >= timer:
-        launch_wow()
-        print("Testing")
-        state = STATE_RUNNING
-      elif is_char_screen or is_logging or is_realm_que or is_realm_list:
-        state = STATE_RUNNING
-
-
-
-
-    print(is_bnet_running, is_wow_running, is_char_screen, is_realm_que, is_logging, is_realm_list, state)
-
-
-def sleep(count=1, msg=""):
-  print("%s" % msg if msg else "Sleeping for %s seconds..." % count)
-  time.sleep(count)
+def msleep(count=1, msg=""):
+  print("%s - sleeping for %s seconds" % (msg, count) if msg else "Sleeping for %s seconds..." % count)
+  sleep(count)
 
 def get_is_bnet_running():
   return process_exists(PROCESS_BNET)
+
+def get_is_bnet_visible():
+  return find_pattern(patterns.BNET_PLAY, .6)
 
 def get_is_wow_running():
   return process_exists(PROCESS_WOW)
 
 def get_is_char_screen():
-  return find_pattern(PAT_CHAR_SCREEN, .5)
+  return (find_pattern(patterns.CHAR_SCREEN_DOWN, .6) or find_pattern(patterns.CHAR_SCREEN_LIVE, .6))
 
 def get_is_realm_que():
-  return find_pattern(PAT_REALM_QUE, .3)
+  return find_pattern(patterns.REALM_QUE, .3)
 
-def get_is_logging():
-  return find_pattern(PAT_LOGGING, .3)
+def get_is_gameserver_wait():
+  return find_pattern(patterns.GAMESERVER_WAIT, .4)
 
 def get_is_realm_list():
-  return find_pattern(PAT_REALM_LISTING, .3)
+  return find_pattern(patterns.REALM_LIST, .3)
+
+def get_is_connecting():
+  return find_pattern(patterns.CONNECTING, .6)
+
+def get_is_realm_wait():
+  return find_pattern(patterns.REALM_WAIT, .6)
 
 def process_exists(process):
   try:
@@ -173,12 +221,13 @@ def process_exists(process):
 def process_kill(process):
   try:
     os.system("taskkill /f /im " + process + " >NUL")
+    print("Killing rogue '%s'" % process)
   except:
     print("Error can't kill '%s'" % process)
 
 def find_pattern(pattern, confidence=.7):
   try:
-    return pyautogui.locateCenterOnScreen(pattern, grayscale=False, confidence=confidence)
+    return pyautogui.locateCenterOnScreen(pattern, grayscale=True, confidence=confidence)
   except:
     return False
 
@@ -192,10 +241,10 @@ def click(coords):
 def launch_bnet():
   if get_is_bnet_running():
     process_kill(PROCESS_BNET)
-    print("Killing rogue %s" % PROCESS_BNET)
 
   try:
     subprocess.Popen([EXE_BNET])
+    print("Launching %s" % EXE_BNET)
     return True
   except Exception as ex:
     print("Error launching %s" % EXE_BNET, ex)
@@ -205,44 +254,23 @@ def launch_bnet():
 def launch_wow():
   if get_is_wow_running():
     process_kill(PROCESS_WOW)
-    print("Killing rogue %s" % PROCESS_WOW)
-  # print("Launching Wow")
-  # return True
 
-  coords = find_pattern(PAT_BNET_PLAY)
+  coords = get_is_bnet_visible()
 
   if coords:
     click(coords)
+    print("Launching %s" % PROCESS_WOW)
+    return True
 
-
-  # play_coords = None
-  # start = time.time()
-  # while not play_coords:
-  #   if start + SECONDS_MAX_WAIT <= time.time():
-  #     print("Error finding battlenet client... Restarting...")
-  #     kill_process(BATTLE_NET_PROCESS)
-  #     start_process(BATTLE_NET_EXE)
-  #     start = time.time()
-  #     continue
-  #   play_coords = find_pattern(BATTLE_NET_PLAY_PAT)
-
-  # click(play_coords)
-  # print("Launching '%s'" % WOW_PROCESS)
-
-  # is_wow_running = process_exists(WOW_PROCESS)
-  # start = time.time()
-  # while not is_wow_running:
-  #   if start + SECONDS_MAX_WAIT <= time.time():
-  #     print("Error launching wow... Restarting...")
-  #     return False
-  #   is_wow_running = process_exists(WOW_PROCESS)
-  #   print("Wating for wow")
+  return False
 
 def load_realm():
-  coords = find_pattern(PAT_REALM_LISTING)
+  coords = get_is_realm_list()
   if coords:
-    click([coords[0] + 30, coords[1] + 70])
+    click([coords[0] + 30, coords[1] + 60])
     print("Logging into Realm")
+    return True
+  return False
 
 
 if __name__ == "__main__":
