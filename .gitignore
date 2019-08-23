@@ -5,3 +5,4 @@ __pycache__/
 releases/
 dev.py
 build.bat
+tests/
