@@ -11,7 +11,7 @@ SECONDS_MAX_WAIT = 15
 SECONDS_MAX_WAIT_PROCESS = 30
 SECONDS_SLEEP = 15
 SECONDS_CHAR_SCREEN = 30
-
+SECONDS_LOOP_WAIT = 1
 STATE_INIT = "INIT"
 STATE_LAUNCH_WOW = "LAUNCHING_WOW"
 STATE_WAIT_WOW = "WAITING_WOW"
@@ -23,50 +23,70 @@ STATE_REALM_LIST = "REALM_LIST"
 STATE_REALM_QUE = "REALM_QUE"
 STATE_GAMESERVER_WAIT = "GAMESERVER_WAIT"
 STATE_CONNECTING_WAIT = "CONNECTING_WAIT"
+STATE_HAPPINESS = r"""
+                      WELCOME HOME, FRIENDS!!!
+                      Also, dying now. Enjoy...
+         .(O).      /
+     o.`       `.o
+     /_ _ _ _ _ _\
+      |==|===|==|
+      |==|===|==|
+      |_=|===|=_|
+.-._.-[]\_____/[]-O
+ -'   /=|=|=|=|=\
+     |o |o|o|o| o|
+     |o |o|o|o| o|
+     |o |o|o|o| o|
+     '-.|o|o|o|.-'
+     '--.=====.--'
+"""
 
 def main():
 
   state = STATE_INIT
-  timer = 0
-  last = 0
+  timer = time()
+  last = timer
+  timeout = 0
 
   while True:
-    last = time()
+    if time() <= last + SECONDS_LOOP_WAIT:
+      continue
     # print("\nSTATE:", state, "\nEXE_TIME:", (time() - last), "\nTIMER:", (timer - time()), "\n")
+    last = time()
+
 
     if state == STATE_INIT:
       if not get_is_wow_running():
         if get_is_bnet_running() and get_is_bnet_visible():
           state = STATE_LAUNCH_WOW
-          pass
         else:
           state = STATE_LAUNCH_BNET
-          pass
       else:
 
         if get_is_char_screen():
+          print("Found character screen")
           state = STATE_CHAR_SCREEN
 
-        elif get_is_gameserver_wait():
+        if get_is_gameserver_wait():
           state = STATE_GAMESERVER_WAIT
 
-        elif get_is_realm_que():
+        if get_is_realm_que():
           state = STATE_REALM_QUE
 
-        elif get_is_realm_list():
+        if get_is_realm_list():
           state = STATE_REALM_LIST
 
-        elif get_is_realm_wait():
+        if get_is_realm_wait():
           state = STATE_REALM_WAIT
 
-        elif get_is_connecting():
+        if get_is_connecting():
           state = STATE_CONNECTING_WAIT
 
-        else:
+        if state == STATE_INIT:
           state = STATE_LAUNCH_WOW
-          pass
 
       timer = time() + SECONDS_MAX_WAIT_PROCESS
+      timeout = 0
       continue
 
 
@@ -110,7 +130,8 @@ def main():
 
     elif state == STATE_CONNECTING_WAIT or state == STATE_REALM_WAIT:
       if get_is_connecting() or get_is_realm_wait():
-        msleep(SECONDS_SLEEP, "Waiting for connection/realm...")
+        # msleep(SECONDS_SLEEP, "Waiting for connection/realm...")
+        print("Waiting for connection...")
         timer = time() + SECONDS_MAX_WAIT
       elif get_is_realm_list():
         state = STATE_REALM_LIST
@@ -134,14 +155,15 @@ def main():
 
 
     elif state == STATE_REALM_QUE:
-      if get_is_char_screen():
-        state = STATE_CHAR_SCREEN
-        timer = time() + SECONDS_MAX_WAIT
-      elif get_is_gameserver_wait():
+      if get_is_gameserver_wait():
         state = STATE_GAMESERVER_WAIT
         timer = time() + SECONDS_MAX_WAIT
+      elif get_is_char_screen():
+        print("Found character screen")
+        state = STATE_CHAR_SCREEN
+        timer = time() + SECONDS_MAX_WAIT
       elif get_is_realm_que():
-        msleep(SECONDS_SLEEP, "Waiting for realm que...")
+        print("Waiting for realm queue...")
         timer = time() + SECONDS_MAX_WAIT
       elif time() >= timer:
         state = STATE_GAMESERVER_WAIT
@@ -150,12 +172,16 @@ def main():
 
 
     elif state == STATE_GAMESERVER_WAIT:
-      if get_is_char_screen():
+      if get_is_gameserver_wait():
+        print("Waiting for gameserver...")
+        timer = time() + SECONDS_MAX_WAIT
+      elif get_is_char_screen():
+        print("Found character screen")
         state = STATE_CHAR_SCREEN
         timer = time() + SECONDS_MAX_WAIT
-      elif get_is_gameserver_wait():
-        msleep(SECONDS_SLEEP, "Waiting for gameserver...")
-        timer = time() + SECONDS_MAX_WAIT
+      elif get_is_realm_list():
+        state = STATE_REALM_LIST
+        print("Back to realmlist for some reason.")
       elif time() >= timer:
         print("Error timed out waiting for gameserver... Restarting...")
         state = STATE_INIT
@@ -163,20 +189,35 @@ def main():
 
 
     elif state == STATE_CHAR_SCREEN:
-      if get_is_char_screen():
-        msleep(SECONDS_CHAR_SCREEN, "Waiting on character screen")
-        timer = time() + SECONDS_MAX_WAIT
+      salvation = get_is_live()
+      if salvation:
+        click(salvation)
+        print(STATE_HAPPINESS)
+        sys.exit(0)
+      elif get_is_char_screen():
+        if timeout == 0:
+          timeout = time() + 60*30
+          print("Time till timeout: 30 minutes")
+        else:
+          doom = int((timeout - time()))
+          if doom % 300 == 0:
+            print("Time till timeout: %s minutes" % int((timeout - time()) / 60))
+        timer = time() + SECONDS_CHAR_SCREEN
       elif not get_is_wow_running():
         state = STATE_INIT
       elif time() >= timer and not get_is_char_screen():
         print("Error confirming character screen... Restarting...")
         state = STATE_INIT
-      continue
+      elif time() >= timer - (SECONDS_CHAR_SCREEN/2):
+        print("Losing character screen...")
 
 
 def msleep(count=1, msg=""):
   print("%s - sleeping for %s seconds" % (msg, count) if msg else "Sleeping for %s seconds..." % count)
   sleep(count)
+
+def get_is_live():
+  return find_pattern(patterns.CHAR_SCREEN_LIVE, .7, grayscale=False)
 
 def get_is_bnet_running():
   return process_exists(PROCESS_BNET)
@@ -188,7 +229,7 @@ def get_is_wow_running():
   return process_exists(PROCESS_WOW)
 
 def get_is_char_screen():
-  return (find_pattern(patterns.CHAR_SCREEN_DOWN, .6) or find_pattern(patterns.CHAR_SCREEN_LIVE, .6))
+  return find_pattern(patterns.CHAR_SCREEN_DOWN, .5) or get_is_live()
 
 def get_is_realm_que():
   return find_pattern(patterns.REALM_QUE, .3)
@@ -225,9 +266,9 @@ def process_kill(process):
   except:
     print("Error can't kill '%s'" % process)
 
-def find_pattern(pattern, confidence=.7):
+def find_pattern(pattern, confidence=.7, grayscale=True):
   try:
-    return pyautogui.locateCenterOnScreen(pattern, grayscale=True, confidence=confidence)
+    return pyautogui.locateCenterOnScreen(pattern, grayscale=grayscale, confidence=confidence)
   except:
     return False
 
@@ -248,6 +289,7 @@ def launch_bnet():
     return True
   except Exception as ex:
     print("Error launching %s" % EXE_BNET, ex)
+    sys.exit(1)
 
   return False
 
